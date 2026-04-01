@@ -1,0 +1,592 @@
+---
+title: "Mapping the Soul's Journey: A Text Analysis of the Egyptian Book of the Dead"
+authors: Clare McGarvey & Sude Boz
+format: html
+editor: visual
+---
+
+# **The Egyptian Book of the dead** by P. Le Page Renouf and Edouard Naville
+
+## Introduction
+
+The Egyptian Book of the Dead, sometimes directly translated as the book of 'coming forth by day' or 'coming out of the day', is a collection of various Ancient Egyptian theological texts designed to assist one with the passage into the afterlife. The collection grew and changed over the course of the civilisation, becoming somewhat standardised during the 26th Dynasty, and contains spells, hymns, prayers and instructions used by the deceased to successfully pass into the afterlife. Originally beginning as inscriptions on the walls of Pharaohs, these funerary texts were adopted by the upper-middle classes around the New Kingdom (1550–1070 BCE) and became an important component of Ancient Egyptian death rites. They were commissioned for the individual and therefore the content and its arrangement varied considerably from book to book. This edition was translated from the original hieroglyphics by P. Le Page Renouf and Edouard Naville, being completed in 1904.
+
+## Set-up
+
+```{r loading libraries}
+library(tidytext)
+library(stringr)
+library(dplyr)
+library(epubr)
+library(ggplot2)
+library(textdata)
+```
+
+```{r loading the book}
+raw_epub <- epub("pg69566-images.epub")
+
+epub_sections <- raw_epub$data[[1]]
+```
+
+### Splitting into Chapters
+
+```{r chapters}
+death_book <- epub_sections |>
+  filter(!str_detect(text, regex("all full-page.*plates have been moved",
+                                  ignore_case = TRUE))) |>
+  mutate(line = str_split(text, "\n")) |>
+  select(-text) |>
+  tidyr::unnest(line) |>
+  mutate(
+    linenumber = row_number(),
+    line = str_trim(line)
+  ) |>
+  filter(line != "") |>
+  mutate(
+    chapter = cumsum(
+      str_detect(line, regex("^CHAPTERS? [IVXLC]")) &
+      !str_detect(line, "=")
+    )
+  ) |>
+  rename(text = line)
+
+# Check
+death_book |>
+  filter(str_detect(str_trim(text), regex("^CHAPTERS? [IVXLC]")) & 
+         !str_detect(text, "=")) |>
+  select(linenumber, chapter, text)
+
+# write.csv(death_book, "death_book.csv")
+```
+
+### Removing Editor's Notes
+
+```{r}
+death_lines <- death_book |>
+  filter(chapter > 0) |>
+  mutate(text = str_remove_all(text, "_")) |>
+  filter(str_squish(text) != "") |>
+  group_by(chapter) |>
+  mutate(
+    notes_start = cumsum(str_detect(str_trim(text), 
+                                    regex("^Notes?\\.?$|^Note\\.$")))
+  ) |>
+  filter(notes_start == 0) |>
+  ungroup() |>
+  filter(!str_detect(str_trim(text), regex("^\\d+\\.\\s*\\.?\\s*$"))) |>
+  filter(!str_detect(text, regex("footnote|see note|\\bpl\\.", 
+                                 ignore_case = TRUE))) |>
+  filter(!str_detect(str_trim(text),
+         regex("^plate |^fig\\.|^vignette", ignore_case = TRUE))) |>
+  filter(str_squish(text) != "")
+```
+
+```{r}
+# Lines mentioning notes/footnote
+death_lines |>
+  filter(str_detect(text, regex("footnote|\\bнote\\b", ignore_case = TRUE))) |>
+  select(linenumber, chapter, text)
+
+# Checking for editorial content
+death_lines |>
+  filter(str_detect(str_trim(text), regex("^\\d+\\."))) |>
+  select(linenumber, chapter, text) |>
+  head(30)
+
+# Checking for scholarly language that signals editor prose, not ritual text
+death_lines |>
+  filter(str_detect(text, regex("papyrus|manuscript|dynasty|translation|lepsius|naville",
+                                ignore_case = TRUE))) |>
+  select(linenumber, chapter, text) |>
+  head(30)
+```
+
+Although some editorial notes remain after cleaning, their presence does not meaningfully affect the analysis.
+
+### Normalising Transliteration Characters
+
+```{r}
+# Normalizing Egyptian transliteration characters to plain ASCII
+death_lines <- death_lines |>
+  mutate(text = str_replace_all(text, 
+    c("ā" = "a", "ē" = "e", "ī" = "i", 
+      "ō" = "o", "ū" = "u", "Ā" = "a",
+      "ȧ" = "a", "â" = "a", "î" = "i")))
+```
+
+### Stop Words
+
+Since the book is an old book, it consists Archaic English words and vocabulary, we decided to treat and tibble them as `custom_stopwords`\`. In addition, we put "editorial, apparatus words and roman numerals that survive lowercasing" as custom_stopwords as well.
+
+```{r}
+# Archaic English forms and editorial/apparatus vocabulary
+custom_stops <- tibble(word = c(
+  # archaic English pronouns and verb forms
+  "thy", "thou", "thee", "hath", "doth", "thereof", "therein",
+  "hast", "art", "thine", "ye", "unto", "shalt",
+  # editorial and apparatus words
+  "text", "texts", "word", "words", "note", "notes", "footnote",
+  "translation", "found", "called", "sense", "book",
+  "papyrus", "papyri", "egyptian", "chapter", "chapters",
+  "written", "turin",
+  # roman numerals that survive lowercasing
+  "ii", "iii", "iv", "vi", "vii", "viii", "ix", "xi", "xii"
+))
+```
+
+### Tokenise
+
+```{r}
+tidy_death <- death_lines |>
+  unnest_tokens(word, text) |>
+  filter(str_detect(word, "^[a-z]+$")) |>
+  anti_join(stop_words) |>
+  anti_join(custom_stops)
+tidy_death
+```
+
+### Chapter Length
+
+```{r}
+tidy_death |>
+  count(chapter, sort = FALSE) |>
+  arrange(n) |>
+  head(40)
+
+tidy_death |>
+  count(chapter, sort = FALSE) |>
+  arrange(desc(n)) |>
+  head(20)
+
+# Summary
+tidy_death |>
+  count(chapter) |>
+  summarise(
+    mean_words = mean(n),
+    median_words = median(n),
+    min_words = min(n),
+    max_words = max(n),
+    total_chapters = n()
+  )
+
+# write.csv(tidy_death, "tidy_death.csv")
+```
+
+One hundred and eighty one chapters have been identified, with the chapters varying considerably in length, ranging from containing 1 non-stopword to 860. The mean words is 105 per chapter but the median is 53, indicating that a few long chapters inflate the average. Eight chapters contain less than 10 non-stopwords, half of which just indicate that the chapter is a repetition of a previous chapter. The others are short phrases, aside from chapter 123 which is split into three short parts and wasn't coded properly.
+
+```{r}
+# Checking which chapters were not matched
+detected_numerals <- death_book |>
+  filter(str_detect(str_trim(text), regex("^CHAPTERS? [IVXLC]")) &
+         !str_detect(text, "=")) |>
+  mutate(numeral = str_extract(str_trim(text), 
+                               regex("(?<=CHAPTERS? )[IVXLC]+"))) |>
+  pull(numeral)
+
+# Chapter names from index
+expected_numerals <- epub_sections |>
+  mutate(line = str_split(text, "\n")) |>
+  select(-text) |>
+  tidyr::unnest(line) |>
+  mutate(line = str_trim(line)) |>
+  filter(str_detect(line, regex("^[IVXLC]+\\.$"))) |>
+  mutate(numeral = str_remove(line, "\\.")) |>
+  pull(numeral) |>
+  unique()
+
+# Missing chapters
+missing_numerals <- setdiff(expected_numerals, detected_numerals)
+missing_numerals
+```
+
+Five chapters were not correctly identified: V, XVI, LXXI, CXLIV, CL, CLXXXVI. Due to the size and nature of the text, this is an understandable misallocation, however, it should be noted that the chapter numbers quoted by R may not exactly align with the chapter numbers from the text.
+
+### Count the frequencies
+
+```{r}
+tidy_death |> 
+  count(word, sort = TRUE) 
+```
+
+### Preliminary Data Analysis
+
+```{r}
+tidy_death |> 
+  count(word, sort = TRUE) |> 
+  filter(n > 150) |> 
+  mutate(word = reorder(word, n)) |> 
+  ggplot(aes(n, word)) +
+  geom_col() +
+  labs(y = NULL)
+```
+
+Trying the same plot with words that are mentioned fewer times:
+
+```{r}
+tidy_death |> 
+  count(word, sort = TRUE) |>
+  filter(n > 70) |> 
+  mutate(word = reorder(word, n)) |>
+  ggplot(aes(n, word)) +
+  geom_col() +
+  labs(y = NULL)
+```
+
+From the preliminary analysis it is clear that the text is theological. The words "Gods", "God", "Lord", "heaven", "earth", divine", "heart", "soul", "father" and "sky" all appear in the top 20 most frequent terms in the text. The most frequently used word of all is "Osiris", the Ancient Egyptian deity who ruled the realm of the dead, followed by "Ra", the sun God and arguably Ancient Egypt's most important deity (Wilkinson, 2003), and "Horus", Osiris' son who was associated with kingship and the social restoration of the deceased (Assmann, 2005, ch. 1). Other common terms specific to Ancient Egyptian theology include "Thoth", the moon God who prescribes over scribes and serves Osiris, and the "Netherworld" also referred to the "Tuat" in the text which is realm the soul traverses after death (Wilkinson, 2003). Despite an absence of terms that explicitly reference death, the most frequent words indicate that the text is deeply spiritual, with specific concern for the afterlife.
+
+# Text Mining Techniques
+
+-   **TF-IDF**
+
+    The book is a collection of thematically distinct ritual chapters, making it an ideal candidate for a technique that rewards words which are frequent in one document but rare across the rest. So, we decided to use TF-IDF for the first technique.
+
+-   **Sentiment Analysis**
+
+    Even though TF-IDF is good at showing the distinctive vocabulary of the book, tells us nothing about the emotional tone of the text. For a funerary document whose stated purpose is to guide and reassure the dead, the emotional register is as analytically meaningful as the words themselves. That is why sentiment analysis is chosen to use as the second technique. Furthermore, the NRC lexicon was selected over Bing or AFINN because it distinguishes between eight discrete emotions.
+
+## 1) TF-IDF
+
+### Set-up
+
+```{r}
+chapter_words <- tidy_death |>
+  count(chapter, word, sort = TRUE)
+
+chapter_words
+```
+
+This table illustrates the number of times each word appears in each chapter, in descending order. Since chapter length is not uniform, the pure count is not overly informative as words appear in greater number just because that chapter is much longer than others.
+
+Chapters with few words are unstable for use with TF-IDF, as a word mentioned only minimally may appear to dominate the chapter, thus artificially inflating the score. Therefore chapters with less than 20 words after stop word removal are not utilised in the TF-IDF analysis.
+
+```{r}
+# Filtering Chapters
+valid_chapters <- tidy_death |>
+  count(chapter) |>
+  filter(n >= 20) |>
+  pull(chapter)
+
+chapter_words <- chapter_words |>
+  filter(chapter %in% valid_chapters)
+```
+
+### Scores
+
+```{r}
+# TF-IDF
+chapter_tfidf <- chapter_words |>
+  bind_tf_idf(word, chapter, n)
+
+# Highest scoring words
+chapter_tfidf |>
+  arrange(desc(tf_idf))
+```
+
+Individual chapters that display distinctive terms within the book are quite varied. Chapter 37 references 'Merta', the sister pair of Goddesses Isis and Nephthys 3 times, 15% of all words in the chapter. The terms "faint" and "crocodile", in chapters 74 and 88 respectively, also make up around 15% of their chapters, an unusual occurrence in other forms of literature but more typical of short prayers and hymns as collected here.
+
+Other chapter themes that seem to be distinct within the collection are 112 which talks of Nechen, the ancient city that severed as the religious and political centre of prehistoric Egypt, chapter 9 and 12 which reference a victorious action and adoration respectively, and chapter 68 which is concerned with possession. Interestingly, the only divinities that are distinct of a chapter is the pair Merta, indicating that the others are referenced throughout the book and are not unique to any one chapter.
+
+### Section Analysis
+
+As these Ancient Egyptian funerary texts were produced specifically for a given customer, they were not uniform in structure or content, instead including the instructions and spells deemed individually most necessary. For example, the Book of Ani, the largest and best preserved book of the dead, contains less than one half of the chapters commonly ascribed to versions of that time and place (Wallis Budge, 1895). There is an assumption that relatives of the dying or deceased selected sections from the full collection at their scribe's disposal, based on what was deemed most useful for their passage and at a length they could afford (“Introduction,” 1904/2022).
+
+From the 26th Dynasty (the Saïte Period) the text was seemingly standardised and a more rigid and widespread order was adopted (Barguet, 1967). Spells were arranged in a uniform sequence, following the structure:
+
+-   Chapters 1-16: Entering the underworld
+-   Chapters 17-63: Mythic origins and rebirth
+-   Chapters 64-129: Journey across the sky
+-   Chapters 130-189: Final vindication
+
+To test whether this edition of the book is aligned with editions of the Saïte Period, TF-IDF will be employed to examine what aspects distinguish each section from the others.
+
+```{r}
+# Sections based on the Saite period ordering
+chapter_tfidf <- chapter_tfidf |>
+  mutate(section = case_when(
+    chapter >= 1  & chapter <= 14  ~ "I: Entering the Underworld\n(Ch. 1–16)",
+    chapter >= 15 & chapter <= 62  ~ "II: Mythic Origins & Rebirth\n(Ch. 17–63)",
+    chapter >= 63 & chapter <= 127 ~ "III: Journey Across the Sky\n(Ch. 64–129)",
+    chapter >= 128                 ~ "IV: Vindication & Power\n(Ch. 130–189)",
+    TRUE ~ NA_character_
+  )) |>
+  mutate(section = factor(section, levels = c(
+    "I: Entering the Underworld\n(Ch. 1–16)",
+    "II: Mythic Origins & Rebirth\n(Ch. 17–63)",
+    "III: Journey Across the Sky\n(Ch. 64–129)",
+    "IV: Vindication & Power\n(Ch. 130–189)"
+  )))
+```
+
+```{r}
+# Aggregate to section level
+section_words <- tidy_death |>
+  filter(chapter %in% valid_chapters, chapter > 0) |>
+  mutate(section = case_when(
+    chapter >= 1  & chapter <= 14  ~ "I: Entering the Underworld",
+    chapter >= 15 & chapter <= 62  ~ "II: Mythic Origins & Rebirth",
+    chapter >= 63 & chapter <= 127 ~ "III: Journey Across the Sky",
+    chapter >= 128                 ~ "IV: Vindication & Power"
+  )) |>
+  mutate(section = factor(section, levels = c(
+    "I: Entering the Underworld",
+    "II: Mythic Origins & Rebirth",
+    "III: Journey Across the Sky",
+    "IV: Vindication & Power"
+  ))) |>
+  count(section, word, sort = TRUE)
+
+# TF-IDF with section as the document unit
+section_tfidf <- section_words |>
+  bind_tf_idf(word, section, n)
+
+# Plot most distinctive words per section
+section_tfidf |>
+  group_by(section) |>
+  slice_max(tf_idf, n = 15) |>
+  ungroup() |>
+  mutate(word = reorder(word, tf_idf)) |>
+  ggplot(aes(tf_idf, word, fill = section)) +
+  geom_col(show.legend = FALSE) +
+  labs(
+    x = "TF-IDF score", y = NULL,
+    title = "Most distinctive words per theological section",
+    subtitle = "Egyptian Book of the Dead- Saite period ordering"
+  ) +
+  facet_wrap(~section, ncol = 2, scales = "free")
+```
+
+Splitting the book into four sections, the first section is especially ceremonial, with a focus on paralysation. Ancient Egyptians believed that at death the various aspects that constitute a person, such as the physical body and the different forms of the soul, were temporarily severed. In order to progress into the next realm re-unification had to occur (Taylor, 2010). The first section seems to align with this initial stage, with distinct focus on "reconcil\[ing\]" and "aris\[ing\]". 'Unclose' refers to rituals that open the deceased mouth, eyes and limbs so that they may use them in the netherworld. The God that is distinct to this section is Sokaru, a funeral deity and the patron saint of the large Memphite necropolis, said to guard the mouth of the passages into the netherworld (Hart, 1986). Additionally, there is a focus on exultation and victory, painting the section as one of triumph.
+
+"Circle" is the most distinct word of the second section, which is almost always in reference to the "Great Circle of the Gods" and invokes divine cycles. References to Apep, the Ancient Egyptian deity of chaos and enemy of Rā, also dominates the second section as does the term "triumphant". Additionally, the Egyptian deity Sut, who murdered his brother Osiris, is a distinct figure in this section and along with terms like "severed", "execution" and "execratest" (to denounce) which indicates a retelling of the original Osiris myth. This along with the distinct terms "defeat", "battle" and "power" indicating this section appertains to Orisis' victory over his adversaries. Generally, this section appears to reference a mythical battle between opposing forces and the triumph of one over the other, revealing the deceased must understand and be ready to re-enact the origin of creation.
+
+The third section references "hotep", an Egyptian word that roughly translates as 'rest' or 'peace', revealing a distinct shift in the journey wherein the deceased is now tranquil, evident also in its talk of a garden. The prehistoric Egyptian city of Nechen and the ancient city of Annu are also distinct of this section, potentially stops along the solar journey. Third person verbs such as 'assumeth', 'maketh', 'pleaseth', 'revealest' and 'disrobest' suggests that this section contains more direct proclamations or pleas to the gods. Reckoning and righteousness indicate a judgement, and 'divine', 'glorified' and 'sacred' allude to reaching the afterlife post-judgement. The section uses material language more than others, discussing a 'garden', 'cubits', 'swine', 'cake' and 'battlements', associated with the Field of Reeds, the paradise that awaits vindicated souls.
+
+The fourth section "Vindication and Power" is defined by the word 'pylon', monumental Ancient Egyptian temple gates, indicating arrival and passage. Amon refers to the creator deity and king of the gods (Wilkinson, 2003) and ka references the life-force part of the soul, interesting appearing here at the end more than at any other part of the book. Procedural language is unique to this section, with 'prepare', 'painted', and 'enwrapping' illustrating instructions or ritual. There is more focus on beauty, soul, gates, praise and rest in this concluding section. Representing a finality and a version of the afterlife which utilises symbolism and imagery similar to that of the Christian idea of heaven.
+
+The Tf-IDF analysis reveals that the vocabulary shifts distinctly over the four sections of the text, depicting a broad theological arc aligned with that put forth by Barguet. Section I is largely defined by ceremonial language, reflecting the formal beginning of the funerary ritual wherein the deceased is reunited with the body. Section II retells the epic mythology of divine creation and through section III a judgement and passage into a sacred realm. Finally, section IV is defined by architectural and devotional language as the deceased finally reaches a place of absolution.
+
+## Zipf's Law
+
+```{r}
+chapter_tfidf |>
+  ggplot(aes(tf)) +
+  geom_histogram(show.legend = FALSE, bins = 40) +
+  xlim(NA, 0.05) +
+  labs(
+    x = "term frequency",
+    y = "number of words",
+    title = "Term frequency distribution across all chapters",
+    subtitle = "Long-tail distribution consistent with Zipf's law"
+  )
+```
+
+```{r}
+freq_by_rank <- tidy_death |>
+  count(chapter, word, sort = TRUE) |>
+  group_by(chapter) |>
+  # term frequency = times word appears / total words in chapter
+  mutate(
+    total = sum(n),
+    term_frequency = n / total,
+    # rank within chapter — rank 1 = most frequent word in that chapter
+    rank = row_number()
+  ) |>
+  ungroup()
+
+freq_by_rank
+```
+
+```{r Fitting slope}
+rank_subset <- freq_by_rank |>
+  filter(rank >= 5, rank <= 200)
+
+lm(log10(term_frequency) ~ log10(rank), data = rank_subset)
+```
+
+```{r Plot}
+
+freq_by_rank |>
+  ggplot(aes(rank, term_frequency, colour = as.factor(chapter))) +
+  geom_abline(intercept = -0.8060, slope = -0.7906,
+              colour = "black", linetype = "dashed", linewidth = 0.8) +
+  geom_line(alpha = 0.3, show.legend = FALSE) +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(
+    x = "rank (log scale)",
+    y = "term frequency (log scale)",
+    title = "Zipf's Law in the Egyptian Book of the Dead",
+    subtitle = "Dashed line shows ideal Zipf distribution"
+  )
+```
+
+The term frequency distribution reveals that this 3000 year old Ancient Egyptian text, translated into Victorian English, follows Zipf's law wherein most words have low term frequencies while a small number appear more rarely but carry specific information.
+
+# 2) Sentiment Analysis
+
+## Sentiment analysis across the four sections
+
+Question we desire to find out about the book is*: Does the emotional register of the spells change as the soul progresses from entering the underworld to final vindication?*
+
+In this way, we believe that we will be able to understand and observe the emotional language and tone of the book and if it changes across the sections.
+
+We decided to use NRC lexicon since it has 8 wide and specific emotions terms.
+
+```{r checking coverage}
+nrc <- get_sentiments("nrc")
+
+# checking what proportion of our vocabulary NRC actually covers
+tidy_death |>
+  distinct(word) |>
+  inner_join(nrc, by = "word") |>
+  summarise(matched = n())
+
+tidy_death |>
+  distinct(word) |>
+  summarise(total = n())
+```
+
+The NRC lexcion matches is 1,964 out of 4,068 unique words, which the coverage is about 48%. This reflects the expected limitations of applying a modern lexicon to archaic religious text: Egyptian proper nouns, transliterated terms, and archaic English forms fall outside NRC's vocabulary entirely. The analysis that follows should therefore be read as indicative rather than exhaustive.
+
+```{r Emotion profile of the whole book}
+# overall emotion distribution across the entire text
+tidy_death |>
+  inner_join(nrc, by = "word") |>
+  # remove the broad positive/negative categories — keep only the 8 emotions
+  filter(!sentiment %in% c("positive", "negative")) |>
+  count(sentiment, sort = TRUE) |>
+  mutate(sentiment = reorder(sentiment, n)) |>
+  ggplot(aes(n, sentiment, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  labs(
+    x = "Number of word occurrences",
+    y = NULL,
+    title = "Overall emotion profile of the Egyptian Book of the Dead",
+    subtitle = "NRC lexicon — 8 basic emotions"
+  )
+
+```
+
+The dominant emotion across the entire text is **trust**, at over 1,500 word occurrences, followed closely by **joy** and **anticipation**. Fear ranks in the fourth, it is present but is not dominant. This distribution is perhaps counterintuitive for a text concerned with death, but aligns with the text's core purpose: as Assmann (2005) describes, the Book of the Dead was designed not to dwell on the terror of dying but to reassure and equip the deceased for what follows. The prevalence of trust reflects the repeated invocation of protective deities whose favour the spells seek to secure, while joy and anticipation speak to the promised reward of eternal life.
+
+```{r emotion by section}
+tidy_death_sections <- tidy_death |>
+  filter(chapter %in% valid_chapters) |>
+  mutate(section = case_when(
+    chapter >= 1  & chapter <= 14  ~ "I: Entering the Underworld",
+    chapter >= 15 & chapter <= 62  ~ "II: Mythic Origins & Rebirth",
+    chapter >= 63 & chapter <= 127 ~ "III: Journey Across the Sky",
+    chapter >= 128                 ~ "IV: Vindication & Power"
+  )) |>
+  mutate(section = factor(section, levels = c(
+    "I: Entering the Underworld",
+    "II: Mythic Origins & Rebirth",
+    "III: Journey Across the Sky",
+    "IV: Vindication & Power"
+  )))
+
+# join with NRC and count emotion words per section
+section_emotions <- tidy_death_sections |>
+  inner_join(nrc, by = "word") |>
+  filter(!sentiment %in% c("positive", "negative")) |>
+  count(section, sentiment)
+
+# normalise by total emotion words in each section
+# so sections of different lengths are fairly comparable
+section_emotions <- section_emotions |>
+  group_by(section) |>
+  mutate(proportion = n / sum(n)) |>
+  ungroup()
+
+# plot
+ggplot(section_emotions, aes(x = sentiment, y = proportion, fill = section)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~section, ncol = 2) +
+  coord_flip() +
+  labs(
+    x = NULL,
+    y = "Proportion of emotion words",
+    title = "Emotion profile by theological section",
+    subtitle = "Proportions allow fair comparison across sections of different lengths"
+  )
+```
+
+Main interpretations:
+
+-   **Trust** dominates all four sections.
+
+-   **Fear** is notably higher in Section II than the others.
+
+-   **Section II** is the most emotionally complex by being closer to each other compared to other sections.
+
+-   **Anger** is the highest in Section III.
+
+Comparing the four theological sections reveals a broadly consistent emotional structure, with trust dominant throughout all four sections. Section II stands out as the most emotionally complex as fear rises to its highest point across the entire text, sitting close to anticipation and joy in proportion. This is consistent with the TF-IDF findings from the previous section, where terms like *battle*, *defeat* and *Sut* were most distinctive here. The emotional register reflects a section preoccupied with conflict and its resolution.
+
+Section III records the highest proportion of anger, which aligns with the soul's active confrontation of adversaries during the solar journey (Assmann, 2005).
+
+By Section IV , trust reaches its peak and fear recedes, suggesting the text's emotional arc follows the soul's progression from mythic conflict toward final vindication. The consistency of joy and anticipation across all sections reinforces the overall optimistic orientation observed in the full-text analysis.
+
+Fear and trust are particularly relevant for a funerary text. We are going to plot how their proportions shift across the four sections
+
+```{r focusing on fear and trust}
+section_emotions |>
+  filter(sentiment %in% c("fear", "trust", "joy", "anticipation")) |>
+  ggplot(aes(x = section, y = proportion, colour = sentiment, group = sentiment)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1)) +
+  labs(
+    x = NULL,
+    y = "Proportion of emotion words",
+    colour = "Emotion",
+    title = "Selected emotions across the four theological sections",
+    subtitle = "Trust and fear move in opposition across the soul's journey"
+  )
+```
+
+Main observations:
+
+-   **Trust** drops sharply from Section I to II, then recovers strongly to finish highest in Section IV.
+
+-   **Fear** does the exact opposite with *trust* ; lowest in Section I, peaks in Section II, then gradually declines to its lowest point in Section IV
+
+-   **Joy** and **anticipation** both decline from Section I and converge toward the end, remaining relatively stable in Sections III and IV
+
+The line plot makes the emotional arc of the text immediately visible. **Trust and fear move in near-perfect opposition across the four sections.** Trust begins at its highest point in Section I where the soul's entry into the underworld, drops sharply as it encounters the mythic conflicts of Section II, then recovers steadily to reach its absolute peak in Section IV.
+
+Fear follows the inverse trajectory: lowest at the outset, it surges in Section II where the Osiris myth and its associated violence dominate, before declining consistently through Sections III and IV. This crossing pattern is the clearest evidence the data offers that the text has a deliberate emotional architecture; one that moves the reader from divine reassurance, through a period of confrontation and danger, and back toward trust and resolution. Joy and anticipation, while present throughout, converge and flatten across the later sections, suggesting they play a supporting rather than structural role in the text's emotional design.
+
+# Conclusion
+
+## Main Findings
+
+Two complementary text mining techniques were applied to the *Egyptian Book of the Dead*: TF-IDF to identify what vocabulary is most distinctive to each section of the text, and NRC sentiment analysis to map the emotional register across the soul's journey.
+
+The TF-IDF analysis confirmed that the vocabulary shifts meaningfully across the four theological sections established during the Saite Period. Section I is dominated by ceremonial language of reunification and opening ritual; Section II by mythological conflict centred on Osiris, Sut, and Apep; Section III by spatial and procedural language evoking the Field of Reeds; and Section IV by architectural and devotional vocabulary marking final arrival. This vocabulary progression is not random, it maps directly onto the theological narrative that scholars such as Assmann (2005) and Barguet (1967) have described, providing quantitative support for a literary structure that was until now discussed only in qualitative terms.
+
+The sentiment analysis adds an emotional dimension to this finding. Across the full text, trust is the dominant emotion, more present than fear, which might seem counterintuitive in a text about death. This aligns with the text's function: the Book of the Dead was designed to reassure and equip, not to frighten. Crucially, when broken into sections, trust and fear follow near-perfect opposing trajectories. Trust is highest at the soul's entry into the underworld and at its final vindication; fear peaks in Section II, precisely where the Osiris myth and its violence are retold. The two analyses are therefore mutually reinforcing: the distinctive words of Section II (battle, defeat, Sut, Apep) explain the emotional spike in fear observed there.
+
+The analysis demonstrates that the *Egyptian Book of the Dea*d is not simply a collection of disconnected spells but a text with a coherent internal architecture, one that is legible to computational methods. TF-IDF revealed a systematic shift in vocabulary across the four sections of the Saite ordering, while NRC sentiment analysis showed that the emotional register follows an arc from reassurance through conflict and back to resolution. Together, these findings suggest that the compilers of the Book of the Dead exercised real editorial judgment in the sequencing of the spells, producing a text whose emotional and thematic progression mirrors the soul's journey it describes.
+
+Several limitations should be noted. The NRC lexicon was built on contemporary English and covers only around 48% of the text's unique vocabulary; archaic and transliterated terms fall entirely outside it. TF-IDF at the section level is also a blunt instrument when sections differ enormously in length. Future analysis could benefit from a domain-specific lexicon for religious or archaic English, and from applying LDA topic modelling to allow the topics to emerge from the text itself rather than being imposed from historical scholarship.
+
+What the analysis does confirm is that 3,000 years after its composition, this funerary text still follows the statistical regularities of natural language, as demonstrated by its conformity to Zipf's law , while carrying a distinctive theological signal that modern text mining can recover.
+
+## References
+
+Assmann, J. (2005). Death and Salvation in Ancient Egypt. In D. Lorton (Trans.), Cornell University Press eBooks. https://doi.org/10.7591/9780801464805
+
+Barguet, P. (1967). Le livre des morts des anciens Egyptiens.
+
+Hart, G. (1986). The Routledge Dictionary of Egyptian Gods and Goddesses. Routledge & Kegan Paul.
+
+Naville, E. (2022). Introduction. In The Egyptian Book of the Dead. Project Gutenberg.
+
+Taylor, J. H. (2010). Journey through the afterlife: Ancient Egyptian Book of the Dead. Harvard University Press.
+
+The Egyptian Book of the Dead (P. Le Page Renouf & E. Naville, Trans.). (2022). Project Gutenberg. (Original work published 1904)
+
+Wilkinson, R. (2003). The Complete Gods and Goddesses of Ancient Egypt. Thames & Hudson.
+
+Wallis Budge, E. A. (1895). The Book of the Dead: The Papyrus of Ani in the British Museum: The Egyptian Text with Interlinear Transliteration and Translation, a Running Translation, Introduction, Etc.
